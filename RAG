@@ -1,0 +1,119 @@
+import streamlit as st
+import pandas as pd
+from langchain_ollama import ChatOllama
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import (
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+    AIMessagePromptTemplate,
+    ChatPromptTemplate
+)
+
+# Initialize the app
+st.title("🧠 Llama 3.2 Excel Analyzer")
+st.caption("🚀 Upload an Excel file and get AI-powered insights for your data!")
+
+# Sidebar configuration
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    selected_model = "llama3.2"
+    st.markdown("### Model Capabilities")
+    st.markdown("""
+    - 📊 Analyze all columns
+    - 📝 Summarize Excel data
+    - 💡 Answer any question about the data
+    """)
+    st.divider()
+    st.markdown("Built with [Ollama](https://ollama.ai/) | [LangChain](https://python.langchain.com/)")
+
+# File upload widget
+uploaded_file = st.file_uploader("Upload an Excel file", type=["xlsx", "xls"])
+
+# Initialize variables
+excel_data = None
+summary = None
+
+if uploaded_file:
+    try:
+        # Load the Excel file and support multiple sheets
+        excel_data = pd.read_excel(uploaded_file, sheet_name=None)
+        st.success("Excel file loaded successfully!")
+        
+        # Display sheet names
+        sheet_names = list(excel_data.keys())
+        st.write(f"Found {len(sheet_names)} sheet(s): {', '.join(sheet_names)}")
+
+        # Summarize data for each sheet
+        summary = {}
+        for sheet_name, df in excel_data.items():
+            st.subheader(f"Preview of Sheet: {sheet_name}")
+            st.dataframe(df.head())  # Display first few rows
+            summary[sheet_name] = {
+                "columns": list(df.columns),
+                "row_count": len(df),
+                "column_stats": df.describe(include='all').to_dict()
+            }
+            st.write(f"Sheet '{sheet_name}' has {len(df)} rows and {len(df.columns)} columns.")
+    
+    except Exception as e:
+        st.error(f"Failed to load the file. Error: {e}")
+
+# Initialize the chat engine
+llm_engine = ChatOllama(
+    model=selected_model,
+    base_url="http://localhost:11434",
+    temperature=0.3
+)
+
+# System prompt configuration
+system_prompt = SystemMessagePromptTemplate.from_template(
+
+    "You should only answer from what is given in an Excel file in the start of the  "
+    "You are an AI assistant. Analyze the provided Excel data thoroughly and answer questions about it. "
+    "For each sheet in the Excel file, extract insights like the number of rows, columns, and unique values. "
+    "If the user asks a specific question, analyze the relevant data dynamically."
+)
+
+# Session state management
+if "message_log" not in st.session_state:
+    st.session_state.message_log = [{"role": "ai", "content": "Hi! I'm Llama 3.2. Upload an Excel file to get started! 📊"}]
+
+# Chat container
+chat_container = st.container()
+
+# Display chat messages
+with chat_container:
+    for message in st.session_state.message_log:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+# Chat input and processing
+user_query = st.chat_input("Ask a question about the uploaded Excel data...")
+
+def generate_ai_response(prompt_chain, context):
+    processing_pipeline = prompt_chain | llm_engine | StrOutputParser()
+    return processing_pipeline.invoke({"context": context})
+
+def build_prompt_chain():
+    prompt_sequence = [system_prompt]
+    for msg in st.session_state.message_log:
+        if msg["role"] == "user":
+            prompt_sequence.append(HumanMessagePromptTemplate.from_template(msg["content"]))
+        elif msg["role"] == "ai":
+            prompt_sequence.append(AIMessagePromptTemplate.from_template(msg["content"]))
+    return ChatPromptTemplate.from_messages(prompt_sequence)
+
+if user_query:
+    st.session_state.message_log.append({"role": "user", "content": user_query})
+    
+    if excel_data is not None:
+        context = f"Excel data summary:\n{summary}" if summary else "No valid data found for the query."
+        with st.spinner("🧠 Processing..."):
+            prompt_chain = build_prompt_chain()
+            ai_response = generate_ai_response(prompt_chain, context)
+    else:
+        ai_response = "Please upload an Excel file first to ask questions about it."
+
+    st.session_state.message_log.append({"role": "ai", "content": ai_response})
+    
+    st.rerun()
